@@ -4,7 +4,7 @@ from typing import List, Optional, Dict, Any
 import requests
 from bs4 import BeautifulSoup
 import uvicorn
-
+import json
 app = FastAPI(
     title="Indian Railway Train Status API",
     description="API to get live train status from Indian Railway NTES",
@@ -59,6 +59,37 @@ class TrainSchedule:
             "train_station_details": [station.to_dict() for station in self.train_station_details]
         }
     
+class TrainsBetweenStations:
+    def __init__(self):
+        self.trains = []
+    def to_dict(self):
+        return {
+            "trains": [train.to_dict() for train in self.trains]
+        }
+        
+class TrainBetweenStationsDetails:
+    def __init__(self):
+        self.train_number = None
+        self.train_name = None
+        self.from_station = None
+        self.from_station_code = None
+        self.to_station = None
+        self.to_station_code = None
+        self.departure_time = None
+        self.arrival_time = None
+        self.duration = None
+        self.days = None
+    def to_dict(self):
+        return {
+            "train_number": self.train_number,
+            "train_name": self.train_name,
+            "from_station": self.from_station,
+            "to_station": self.to_station,
+            "departure_time": self.departure_time,
+            "arrival_time": self.arrival_time,
+            "duration": self.duration,
+            "days": self.days
+        }
 
 def station_details(station: Station):
     if "Yet to start from its source" in station.text:
@@ -142,13 +173,38 @@ def fetch_train_status(train_number: str) -> str:
     except requests.exceptions.RequestException as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch train status: {str(e)}")
 
+def get_tbs(from_station, to_station):
+    url = f"https://erail.in/rail/getTrains.aspx?Station_From={from_station}&Station_To={to_station}&DataSource=0&Language=0&Cache=true"
+    response = requests.get(url).text
+
+    trains_data = response.split("^")[1:]
+    trains = TrainsBetweenStations()
+    for train in trains_data:
+        train_obj = TrainBetweenStationsDetails()
+        train_data = train.split("~")
+        train_obj.train_number = train_data[0]
+        train_obj.train_name = train_data[1]
+        train_obj.from_station = train_data[2]
+        train_obj.from_station_code = train_data[3]
+        train_obj.to_station = train_data[8]
+        train_obj.to_station_code = train_data[9]
+        train_obj.departure_time = train_data[10]
+        train_obj.arrival_time = train_data[11]
+        train_obj.duration = train_data[12]
+        train_obj.days = train_data[13]
+        trains.trains.append(train_obj)
+
+    trains.trains.sort(key=lambda x: x.departure_time)
+    return trains
+
 @app.get("/")
 async def root():
     return {
         "message": "Indian Railway Train Status API",
         "endpoints": {
             "GET /train/{train_number}": "Get train status by train number",
-            "POST /train/status": "Get train status with custom parameters",
+            "GET /trains-between-stations/{from_station}/{to_station}": "Get trains between two stations",
+            "GET /stations": "Get all stations (JSON)",
             "GET /docs": "API documentation"
         }
     }
@@ -156,6 +212,15 @@ async def root():
 @app.get("/train/{train_number}")
 async def test_train_status(train_number: str):
     return train_details(train_number).to_dict()
+
+@app.get("/trains-between-stations/{from_station}/{to_station}")
+async def trains_between_stations(from_station: str, to_station: str):
+    return get_tbs(from_station, to_station).to_dict()
+
+@app.get("/stations")
+async def stations():
+    with open("stations.json", "r") as f:
+        return json.load(f)
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
